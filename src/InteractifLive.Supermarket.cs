@@ -119,10 +119,10 @@ public sealed class Plugin : BasePlugin
 
             var target = GetSingleton(bankType);
             var method = bankType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
-                .FirstOrDefault(candidate => candidate.Name == "AddMoney" && candidate.GetParameters().Length == 1 && candidate.GetParameters()[0].ParameterType == typeof(int));
-            if (method is null) { message = "Méthode AddMoney(int) introuvable"; return false; }
-            method.Invoke(method.IsStatic ? null : target, new object[] { amount });
-            message = $"{amount} ajouté(s)";
+                .FirstOrDefault(candidate => candidate.Name == "AddMoney" && candidate.GetParameters().Length == 0);
+            if (method is null) { message = "Méthode AddMoney() introuvable"; return false; }
+            method.Invoke(method.IsStatic ? null : target, null);
+            message = "AddMoney() exécuté par le jeu";
             return true;
         }
         catch (Exception ex)
