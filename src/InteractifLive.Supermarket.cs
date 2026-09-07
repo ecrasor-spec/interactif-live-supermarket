@@ -13,7 +13,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.1-dev";
+    public const string PluginVersion = "0.1.2-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener? _listener;
     private CancellationTokenSource? _stopToken;
@@ -112,10 +112,15 @@ public sealed class Plugin : BasePlugin
     {
         try
         {
-            var methodOwner = AppDomain.CurrentDomain.GetAssemblies()
+            var methodOwners = AppDomain.CurrentDomain.GetAssemblies()
                 .SelectMany(SafeGetTypes)
                 .SelectMany(type => SafeGetMethods(type).Select(method => new { type, method }))
-                .FirstOrDefault(item => item.method.Name == "AddMoney" && item.method.GetParameters().Length == 0);
+                .Where(item => item.method.Name == "AddMoney" && item.method.GetParameters().Length == 0)
+                .Where(item => !string.Equals(item.type.FullName, "__Project__.Scripts.Cheating.CheatCanvas", StringComparison.Ordinal))
+                .OrderBy(item => string.Equals(item.type.FullName, "__Project__.Scripts.Cheating.CheatManager", StringComparison.Ordinal) ? 0 : 1)
+                .ThenBy(item => item.type.FullName?.Contains("Cheat", StringComparison.OrdinalIgnoreCase) == true ? 0 : 1)
+                .ToList();
+            var methodOwner = methodOwners.FirstOrDefault();
             if (methodOwner is null) { message = "Méthode AddMoney() introuvable dans les classes chargées"; return false; }
 
             var target = GetSingleton(methodOwner.type) ?? FindUnityInstance(methodOwner.type);
