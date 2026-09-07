@@ -1,10 +1,10 @@
 {
   "id": "interactif-live-supermarket",
   "name": "Interactif Live — Supermarket Simulator",
-  "version": "0.1.7-dev",
+  "version": "0.1.8-dev",
   "released": false,
   "status": "development",
-  "message": "Actions Supermarket : argent, clients, voleurs, déchets, saleté, niveau et éclairage.",
+  "message": "Actions Supermarket : clients, livraisons d’articles débloqués, déchets, saleté, nettoyage et éclairage.",
   "repository_url": "https://github.com/ecrasor-spec/interactif-live-supermarket",
   "download_url": "",
   "checksum_sha256": ""

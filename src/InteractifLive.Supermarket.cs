@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.7-dev";
+    public const string PluginVersion = "0.1.8-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -110,16 +110,12 @@ public sealed class Plugin : BasePlugin
                 Log.LogInfo($"Action reçue : {payload.Action ?? "ping"} · donateur : {payload.Donor ?? "inconnu"}");
                 var gameplay = false;
                 var resultMessage = "Action journalisée";
-                if (TryReadAmount(payload.Parameters, out var amount) &&
-                    (string.Equals(payload.Action, "add_money", StringComparison.OrdinalIgnoreCase)
-                     || string.Equals(payload.Action, "remove_money", StringComparison.OrdinalIgnoreCase)))
+                if (!string.IsNullOrWhiteSpace(payload.Action))
                 {
-                    var signedAmount = string.Equals(payload.Action, "remove_money", StringComparison.OrdinalIgnoreCase) ? -amount : amount;
-                    gameplay = QueueGameAction(payload.Action, Math.Clamp(signedAmount, -100000, 100000), out resultMessage);
-                }
-                else if (!string.IsNullOrWhiteSpace(payload.Action))
-                {
-                    gameplay = QueueGameAction(payload.Action, 0, out resultMessage);
+                    var amount = ReadAmount(payload.Parameters);
+                    if (string.Equals(payload.Action, "add_money", StringComparison.OrdinalIgnoreCase) && amount == 0) amount = 100;
+                    if (string.Equals(payload.Action, "remove_money", StringComparison.OrdinalIgnoreCase)) amount = -Math.Abs(amount == 0 ? 100 : amount);
+                    gameplay = QueueGameAction(payload.Action, Math.Clamp(amount, -100000, 100000), out resultMessage);
                 }
                 body = JsonSerializer.Serialize(new { success = true, accepted = true, action = payload.Action ?? "ping", gameplay, message = resultMessage });
             }
@@ -140,13 +136,10 @@ public sealed class Plugin : BasePlugin
         }
     }
 
-    private static bool TryReadAmount(JsonElement parameters, out int amount)
+    private static int ReadAmount(JsonElement parameters)
     {
-        amount = 100;
-        if (parameters.ValueKind != JsonValueKind.Object || !parameters.TryGetProperty("amount", out var value)) return true;
-        if (!value.TryGetInt32(out var parsed)) return false;
-        amount = Math.Clamp(Math.Abs(parsed), 1, 100000);
-        return true;
+        if (parameters.ValueKind != JsonValueKind.Object || !parameters.TryGetProperty("amount", out var value)) return 0;
+        return value.TryGetInt32(out var parsed) ? Math.Clamp(Math.Abs(parsed), 1, 100000) : 0;
     }
 
     private bool QueueGameAction(string action, int amount, out string message)
@@ -191,16 +184,26 @@ public sealed class Plugin : BasePlugin
         var mappings = new Dictionary<string, (string type, string[] methods, object[] args)>(StringComparer.OrdinalIgnoreCase)
         {
             ["spawn_customer"] = ("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>()),
-            ["client_happy"] = ("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>()),
-            ["spawn_delivery"] = ("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>()),
             ["spawn_shoplifter"] = ("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>()),
-            ["angry_customer"] = ("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>()),
             ["spawn_garbage"] = ("GarbageManager", new[] { "SpawnGarbage", "CreateJustGarbage" }, Array.Empty<object>()),
             ["spawn_mud"] = ("GarbageManager", new[] { "CreateJustDirt" }, Array.Empty<object>()),
             ["clean_store"] = ("GarbageManager", new[] { "Dusting" }, Array.Empty<object>()),
             ["upgrade_store"] = ("StoreLevelManager", new[] { "AddPoint" }, new object[] { 100 }),
-            ["stock_bonus"] = ("StoreLevelManager", new[] { "AddPointOrder" }, new object[] { 1 }),
         };
+
+        var repeat = Math.Clamp(Math.Abs(amount), 1, 10);
+        if (string.Equals(action, "spawn_customers", StringComparison.OrdinalIgnoreCase))
+        {
+            for (var i = 0; i < repeat; i++) if (!TryInvokeNamed("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>(), out message)) return false;
+            message = $"{repeat} clients ajoutés";
+            return true;
+        }
+        if (string.Equals(action, "spawn_delivery", StringComparison.OrdinalIgnoreCase) || string.Equals(action, "stock_bonus", StringComparison.OrdinalIgnoreCase))
+            return TryDeliverUnlockedProducts(repeat, out message);
+        if (string.Equals(action, "remove_customer", StringComparison.OrdinalIgnoreCase) || string.Equals(action, "remove_customers", StringComparison.OrdinalIgnoreCase))
+            return TryRemoveCustomers(repeat, out message);
+        if (string.Equals(action, "angry_customer", StringComparison.OrdinalIgnoreCase))
+            return TryInvokeNamed("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>(), out message);
 
         if (mappings.TryGetValue(action, out var mapping) && TryInvokeNamed(mapping.type, mapping.methods, mapping.args, out message))
             return true;
@@ -212,9 +215,9 @@ public sealed class Plugin : BasePlugin
         if (string.Equals(action, "open_store", StringComparison.OrdinalIgnoreCase) &&
             TrySetProperty("StoreLightManager", "TurnOn", true, out message)) return true;
         if (string.Equals(action, "close_store", StringComparison.OrdinalIgnoreCase) &&
-            TrySetProperty("StoreLightManager", "TurnOn", false, out message)) return true;
-        if (string.Equals(action, "bankruptcy_warning", StringComparison.OrdinalIgnoreCase))
-            return TryAddMoney(-500, out message);
+            TryInvokeNamed("StoreStatus", new[] { "SetIsOpenField" }, new object[] { false }, out message)) return true;
+        if (string.Equals(action, "block_checkout", StringComparison.OrdinalIgnoreCase) &&
+            TryInvokeNamed("StoreStatus", new[] { "SetIsOpenField" }, new object[] { false }, out message)) return true;
         if (string.Equals(action, "announce_donor", StringComparison.OrdinalIgnoreCase))
         {
             message = "Action annoncee dans le journal du pont";
@@ -225,6 +228,61 @@ public sealed class Plugin : BasePlugin
         Log.LogWarning(message);
         return false;
     }
+
+    private bool TryDeliverUnlockedProducts(int count, out string message)
+    {
+        try
+        {
+            var deliveryType = FindType("DeliveryManager");
+            var licenseType = FindType("ProductLicenseManager");
+            var cartType = FindType("CartData");
+            var itemType = FindType("ItemQuantity");
+            var delivery = deliveryType is null ? null : GetSingleton(deliveryType) ?? FindUnityInstance(deliveryType);
+            var licenses = licenseType is null ? null : GetSingleton(licenseType) ?? FindUnityInstance(licenseType);
+            if (delivery is null || licenses is null || cartType is null || itemType is null) { message = "système de livraison ou licences introuvable"; return false; }
+            var productProperty = licenseType.GetProperty("ActiveProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? licenseType.GetProperty("UnlockedProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            var productIds = productProperty?.GetValue(licenses) as System.Collections.IEnumerable;
+            var productId = productIds?.Cast<object>().Select(Convert.ToInt32).FirstOrDefault() ?? 0;
+            if (productId <= 0) { message = "aucun article débloqué disponible pour la livraison"; return false; }
+            var cart = Activator.CreateInstance(cartType);
+            var item = Activator.CreateInstance(itemType, new object[] { productId, 0f });
+            var cartsProperty = cartType.GetProperty("ProductInCarts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            var cartsType = cartsProperty?.PropertyType;
+            var carts = cartsType is null ? null : Activator.CreateInstance(cartsType);
+            var add = carts?.GetType().GetMethod("Add", new[] { itemType });
+            if (cart is null || item is null || carts is null || add is null || cartsProperty?.CanWrite != true) { message = "conteneur de livraison introuvable"; return false; }
+            add.Invoke(carts, new[] { item });
+            cartsProperty.SetValue(cart, carts);
+            var method = deliveryType.GetMethod("Delivery", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { cartType }, null);
+            if (method is null) { message = "méthode Delivery introuvable"; return false; }
+            for (var i = 0; i < count; i++) method.Invoke(delivery, new[] { cart });
+            message = $"{count} livraison(s) d’un article débloqué";
+            return true;
+        }
+        catch (Exception ex) { message = $"livraison non exécutée : {ex.GetBaseException().Message}"; return false; }
+    }
+
+    private bool TryRemoveCustomers(int count, out string message)
+    {
+        try
+        {
+            var managerType = FindType("CustomerManager");
+            var generatorType = FindType("CustomerGenerator");
+            var manager = managerType is null ? null : GetSingleton(managerType) ?? FindUnityInstance(managerType);
+            var generator = generatorType is null ? null : GetSingleton(generatorType) ?? FindUnityInstance(generatorType);
+            var customers = managerType?.GetProperty("ActiveCustomers", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(manager) as System.Collections.IEnumerable;
+            var customerList = customers?.Cast<object>().Take(count).ToList() ?? new List<object>();
+            var method = generatorType?.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).FirstOrDefault(m => m.Name == "DeSpawn" && m.GetParameters().Length == 1);
+            if (generator is null || method is null || customerList.Count == 0) { message = "aucun client actif à retirer"; return false; }
+            foreach (var customer in customerList) method.Invoke(generator, new[] { customer });
+            message = $"{customerList.Count} client(s) retiré(s)";
+            return true;
+        }
+        catch (Exception ex) { message = $"retrait de client impossible : {ex.GetBaseException().Message}"; return false; }
+    }
+
+    private static Type FindType(string typeName) => AppDomain.CurrentDomain.GetAssemblies().SelectMany(SafeGetTypes).FirstOrDefault(type => string.Equals(type.Name, typeName, StringComparison.Ordinal));
 
     private bool TryInvokeNamed(string typeName, string[] methodNames, object[] args, out string message)
     {
