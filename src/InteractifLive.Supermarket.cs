@@ -112,16 +112,14 @@ public sealed class Plugin : BasePlugin
     {
         try
         {
-            var bankType = AppDomain.CurrentDomain.GetAssemblies()
+            var methodOwner = AppDomain.CurrentDomain.GetAssemblies()
                 .SelectMany(SafeGetTypes)
-                .FirstOrDefault(type => string.Equals(type.Name, "BankManager", StringComparison.Ordinal));
-            if (bankType is null) { message = "BankManager introuvable"; return false; }
+                .SelectMany(type => SafeGetMethods(type).Select(method => new { type, method }))
+                .FirstOrDefault(item => item.method.Name == "AddMoney" && item.method.GetParameters().Length == 0);
+            if (methodOwner is null) { message = "Méthode AddMoney() introuvable dans les classes chargées"; return false; }
 
-            var target = GetSingleton(bankType);
-            var method = bankType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
-                .FirstOrDefault(candidate => candidate.Name == "AddMoney" && candidate.GetParameters().Length == 0);
-            if (method is null) { message = "Méthode AddMoney() introuvable"; return false; }
-            method.Invoke(method.IsStatic ? null : target, null);
+            var target = GetSingleton(methodOwner.type);
+            methodOwner.method.Invoke(methodOwner.method.IsStatic ? null : target, null);
             message = "AddMoney() exécuté par le jeu";
             return true;
         }
@@ -150,6 +148,12 @@ public sealed class Plugin : BasePlugin
         try { return assembly.GetTypes(); }
         catch (ReflectionTypeLoadException ex) { return ex.Types.Where(type => type is not null)!; }
         catch { return Array.Empty<Type>(); }
+    }
+
+    private static IEnumerable<MethodInfo> SafeGetMethods(Type type)
+    {
+        try { return type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static); }
+        catch { return Array.Empty<MethodInfo>(); }
     }
 
     private sealed class BridgeAction
