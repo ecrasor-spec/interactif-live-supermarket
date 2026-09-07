@@ -13,7 +13,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.2-dev";
+    public const string PluginVersion = "0.1.3-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener? _listener;
     private CancellationTokenSource? _stopToken;
@@ -163,13 +163,23 @@ public sealed class Plugin : BasePlugin
                 .FirstOrDefault(type => type is not null);
             if (unityObjectType is null) return null;
 
-            var findMethod = unityObjectType
+            var findMethods = unityObjectType
                 .GetMethods(BindingFlags.Public | BindingFlags.Static)
-                .FirstOrDefault(method => method.Name == "FindObjectOfType"
+                .Where(method => method.Name == "FindObjectOfType"
                     && method.IsGenericMethodDefinition
                     && method.GetGenericArguments().Length == 1
-                    && method.GetParameters().Length == 0);
-            return findMethod?.MakeGenericMethod(type).Invoke(null, null);
+                    && (method.GetParameters().Length == 0
+                        || (method.GetParameters().Length == 1 && method.GetParameters()[0].ParameterType == typeof(bool))))
+                .OrderByDescending(method => method.GetParameters().Length == 1)
+                .ToList();
+
+            foreach (var findMethod in findMethods)
+            {
+                var arguments = findMethod.GetParameters().Length == 1 ? new object[] { true } : null;
+                var result = findMethod.MakeGenericMethod(type).Invoke(null, arguments);
+                if (result is not null) return result;
+            }
+            return null;
         }
         catch (Exception ex)
         {
