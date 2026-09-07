@@ -13,7 +13,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.0-dev";
+    public const string PluginVersion = "0.1.1-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener? _listener;
     private CancellationTokenSource? _stopToken;
@@ -118,7 +118,13 @@ public sealed class Plugin : BasePlugin
                 .FirstOrDefault(item => item.method.Name == "AddMoney" && item.method.GetParameters().Length == 0);
             if (methodOwner is null) { message = "Méthode AddMoney() introuvable dans les classes chargées"; return false; }
 
-            var target = GetSingleton(methodOwner.type);
+            var target = GetSingleton(methodOwner.type) ?? FindUnityInstance(methodOwner.type);
+            if (!methodOwner.method.IsStatic && target is null)
+            {
+                message = $"AddMoney non exécuté : instance de {methodOwner.type.FullName} introuvable";
+                Log.LogWarning(message);
+                return false;
+            }
             methodOwner.method.Invoke(methodOwner.method.IsStatic ? null : target, null);
             message = "AddMoney() exécuté par le jeu";
             return true;
@@ -135,12 +141,36 @@ public sealed class Plugin : BasePlugin
     {
         foreach (var name in new[] { "Instance", "instance", "CurrentInstance" })
         {
-            var property = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            var property = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy);
             if (property is not null) return property.GetValue(null);
-            var field = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            var field = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy);
             if (field is not null) return field.GetValue(null);
         }
         return null;
+    }
+
+    private object? FindUnityInstance(Type type)
+    {
+        try
+        {
+            var unityObjectType = AppDomain.CurrentDomain.GetAssemblies()
+                .Select(assembly => assembly.GetType("UnityEngine.Object", throwOnError: false))
+                .FirstOrDefault(type => type is not null);
+            if (unityObjectType is null) return null;
+
+            var findMethod = unityObjectType
+                .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .FirstOrDefault(method => method.Name == "FindObjectOfType"
+                    && method.IsGenericMethodDefinition
+                    && method.GetGenericArguments().Length == 1
+                    && method.GetParameters().Length == 0);
+            return findMethod?.MakeGenericMethod(type).Invoke(null, null);
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Recherche Unity de l'instance {type.FullName} impossible : {ex.GetBaseException().Message}");
+            return null;
+        }
     }
 
     private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
