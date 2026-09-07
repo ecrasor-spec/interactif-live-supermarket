@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.5-dev";
+    public const string PluginVersion = "0.1.6-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -176,6 +176,16 @@ public sealed class Plugin : BasePlugin
             if (moneyManagerType is not null)
             {
                 var moneyManager = GetSingleton(moneyManagerType) ?? FindUnityInstance(moneyManagerType);
+                var moneyTransition = moneyManagerType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .FirstOrDefault(method => method.Name == "MoneyTransition" && method.GetParameters().Length == 3);
+                if (moneyManager is not null && moneyTransition is not null)
+                {
+                    var transitionType = moneyTransition.GetParameters()[1].ParameterType;
+                    moneyTransition.Invoke(moneyManager, new object[] { (float)amount, Enum.ToObject(transitionType, 0), true });
+                    message = $"AddMoney() exécuté par le jeu : +{amount}";
+                    return true;
+                }
+
                 var moneyProperty = moneyManagerType.GetProperty("Money", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                 if (moneyManager is not null && moneyProperty?.CanRead == true && moneyProperty.CanWrite)
                 {
