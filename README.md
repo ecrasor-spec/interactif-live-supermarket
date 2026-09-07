@@ -2,6 +2,8 @@
 
 Plugin BepInEx IL2CPP dédié à l'intégration TikTok d'Interactif Live.
 
+Le dépôt officiel du plugin est : https://github.com/ecrasor-spec/interactif-live-supermarket
+
 ## État
 
 Le projet est au stade de bootstrap : le plugin doit d'abord se charger dans le jeu et exposer sa version. Les effets de jeu seront ajoutés après génération des assemblages IL2CPP de Supermarket Simulator, afin de cibler les classes de la version installée sans inventer de noms de méthodes.
