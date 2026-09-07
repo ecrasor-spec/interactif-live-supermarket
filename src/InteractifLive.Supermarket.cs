@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.10-dev";
+    public const string PluginVersion = "0.1.11-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -249,29 +249,32 @@ public sealed class Plugin : BasePlugin
             var delivery = deliveryType is null ? null : GetSingleton(deliveryType) ?? FindUnityInstance(deliveryType);
             var licenses = licenseType is null ? null : GetSingleton(licenseType) ?? FindUnityInstance(licenseType);
             if (delivery is null || licenses is null || cartType is null || itemType is null) { message = "système de livraison ou licences introuvable"; return false; }
-            var productProperty = licenseType.GetProperty("ActiveProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? licenseType.GetProperty("UnlockedProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            var productIds = productProperty?.GetValue(licenses);
-            var productId = ReadListItems(productIds).Select(Convert.ToInt32).FirstOrDefault();
-            if (productId <= 0)
-            {
-                var unlockedProperty = licenseType.GetProperty("UnlockedProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                productId = ReadListItems(unlockedProperty?.GetValue(licenses)).Select(Convert.ToInt32).FirstOrDefault();
-            }
-            if (productId <= 0) { message = "aucun article débloqué disponible pour la livraison"; return false; }
-            var cart = Activator.CreateInstance(cartType);
-            var item = Activator.CreateInstance(itemType, new object[] { productId, 0f });
+            var unlockedProperty = licenseType.GetProperty("UnlockedProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            var activeProperty = licenseType.GetProperty("ActiveProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            var productPool = ReadListItems(unlockedProperty?.GetValue(licenses)).Select(Convert.ToInt32).Where(id => id > 0).Distinct().ToList();
+            if (productPool.Count == 0)
+                productPool = ReadListItems(activeProperty?.GetValue(licenses)).Select(Convert.ToInt32).Where(id => id > 0).Distinct().ToList();
+            if (productPool.Count == 0) { message = "aucun article débloqué disponible pour la livraison"; return false; }
             var cartsProperty = cartType.GetProperty("ProductInCarts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             var cartsType = cartsProperty?.PropertyType;
-            var carts = cartsType is null ? null : Activator.CreateInstance(cartsType);
-            var add = carts?.GetType().GetMethod("Add", new[] { itemType });
-            if (cart is null || item is null || carts is null || add is null || cartsProperty?.CanWrite != true) { message = "conteneur de livraison introuvable"; return false; }
-            add.Invoke(carts, new[] { item });
-            cartsProperty.SetValue(cart, carts);
+            if (cartsType is null || cartsProperty?.CanWrite != true) { message = "conteneur de livraison introuvable"; return false; }
             var method = deliveryType.GetMethod("Delivery", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { cartType }, null);
             if (method is null) { message = "méthode Delivery introuvable"; return false; }
-            for (var i = 0; i < count; i++) method.Invoke(delivery, new[] { cart });
-            message = $"{count} livraison(s) d’un article débloqué";
+            var deliveredProducts = new List<int>();
+            for (var i = 0; i < count; i++)
+            {
+                var productId = productPool[UnityEngine.Random.Range(0, productPool.Count)];
+                var cart = Activator.CreateInstance(cartType);
+                var item = Activator.CreateInstance(itemType, new object[] { productId, 0f });
+                var carts = Activator.CreateInstance(cartsType);
+                var add = carts?.GetType().GetMethod("Add", new[] { itemType });
+                if (cart is null || item is null || carts is null || add is null) { message = "conteneur de livraison introuvable"; return false; }
+                add.Invoke(carts, new[] { item });
+                cartsProperty.SetValue(cart, carts);
+                method.Invoke(delivery, new[] { cart });
+                deliveredProducts.Add(productId);
+            }
+            message = $"{count} livraison(s) aléatoire(s) parmi {productPool.Count} article(s) débloqué(s)";
             return true;
         }
         catch (Exception ex) { message = $"livraison non exécutée : {ex.GetBaseException().Message}"; return false; }
