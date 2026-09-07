@@ -1,10 +1,10 @@
 {
   "id": "interactif-live-supermarket",
   "name": "Interactif Live — Supermarket Simulator",
-  "version": "0.1.6-dev",
+  "version": "0.1.7-dev",
   "released": false,
   "status": "development",
-  "message": "Plugin bootstrap publié ; les effets de gameplay sont encore en développement.",
+  "message": "Actions Supermarket : argent, clients, voleurs, déchets, saleté, niveau et éclairage.",
   "repository_url": "https://github.com/ecrasor-spec/interactif-live-supermarket",
   "download_url": "",
   "checksum_sha256": ""

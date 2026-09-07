@@ -34,11 +34,11 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.6-dev";
+    public const string PluginVersion = "0.1.7-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
-    private readonly ConcurrentQueue<PendingMoneyAction> _pendingMoneyActions = new();
+    private readonly ConcurrentQueue<PendingGameAction> _pendingGameActions = new();
     private ActionRunner _actionRunner;
 
     public override void Load()
@@ -110,10 +110,16 @@ public sealed class Plugin : BasePlugin
                 Log.LogInfo($"Action reçue : {payload.Action ?? "ping"} · donateur : {payload.Donor ?? "inconnu"}");
                 var gameplay = false;
                 var resultMessage = "Action journalisée";
-                if (string.Equals(payload.Action, "add_money", StringComparison.OrdinalIgnoreCase))
+                if (TryReadAmount(payload.Parameters, out var amount) &&
+                    (string.Equals(payload.Action, "add_money", StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(payload.Action, "remove_money", StringComparison.OrdinalIgnoreCase)))
                 {
-                    var amount = payload.Parameters.ValueKind == JsonValueKind.Object && payload.Parameters.TryGetProperty("amount", out var value) && value.TryGetInt32(out var parsed) ? parsed : 100;
-                    gameplay = QueueAddMoney(Math.Clamp(amount, 1, 100000), out resultMessage);
+                    var signedAmount = string.Equals(payload.Action, "remove_money", StringComparison.OrdinalIgnoreCase) ? -amount : amount;
+                    gameplay = QueueGameAction(payload.Action, Math.Clamp(signedAmount, -100000, 100000), out resultMessage);
+                }
+                else if (!string.IsNullOrWhiteSpace(payload.Action))
+                {
+                    gameplay = QueueGameAction(payload.Action, 0, out resultMessage);
                 }
                 body = JsonSerializer.Serialize(new { success = true, accepted = true, action = payload.Action ?? "ping", gameplay, message = resultMessage });
             }
@@ -134,13 +140,22 @@ public sealed class Plugin : BasePlugin
         }
     }
 
-    private bool QueueAddMoney(int amount, out string message)
+    private static bool TryReadAmount(JsonElement parameters, out int amount)
     {
-        var pending = new PendingMoneyAction(amount);
-        _pendingMoneyActions.Enqueue(pending);
+        amount = 100;
+        if (parameters.ValueKind != JsonValueKind.Object || !parameters.TryGetProperty("amount", out var value)) return true;
+        if (!value.TryGetInt32(out var parsed)) return false;
+        amount = Math.Clamp(Math.Abs(parsed), 1, 100000);
+        return true;
+    }
+
+    private bool QueueGameAction(string action, int amount, out string message)
+    {
+        var pending = new PendingGameAction(action, amount);
+        _pendingGameActions.Enqueue(pending);
         if (!pending.Completion.Task.Wait(TimeSpan.FromSeconds(10)))
         {
-            message = "AddMoney non exécuté : délai dépassé en attendant le thread principal Unity";
+            message = $"{action} non exécuté : délai dépassé en attendant le thread principal Unity";
             Log.LogWarning(message);
             return false;
         }
@@ -152,18 +167,91 @@ public sealed class Plugin : BasePlugin
 
     private void ProcessPendingActions()
     {
-        while (_pendingMoneyActions.TryDequeue(out var pending))
+        while (_pendingGameActions.TryDequeue(out var pending))
         {
             try
             {
-                var success = TryAddMoney(pending.Amount, out var message);
+                var success = TryGameAction(pending.Action, pending.Amount, out var message);
                 pending.Completion.TrySetResult(new ActionResult(success, message));
             }
             catch (Exception ex)
             {
-                pending.Completion.TrySetResult(new ActionResult(false, $"AddMoney non exécuté : {ex.GetBaseException().Message}"));
+                pending.Completion.TrySetResult(new ActionResult(false, $"{pending.Action} non exécuté : {ex.GetBaseException().Message}"));
             }
         }
+    }
+
+    private bool TryGameAction(string action, int amount, out string message)
+    {
+        if (string.Equals(action, "add_money", StringComparison.OrdinalIgnoreCase))
+            return TryAddMoney(Math.Abs(amount), out message);
+        if (string.Equals(action, "remove_money", StringComparison.OrdinalIgnoreCase))
+            return TryAddMoney(-Math.Abs(amount), out message);
+
+        var mappings = new Dictionary<string, (string type, string[] methods, object[] args)>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["spawn_customer"] = ("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>()),
+            ["client_happy"] = ("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>()),
+            ["spawn_delivery"] = ("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>()),
+            ["spawn_shoplifter"] = ("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>()),
+            ["angry_customer"] = ("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>()),
+            ["spawn_garbage"] = ("GarbageManager", new[] { "SpawnGarbage", "CreateJustGarbage" }, Array.Empty<object>()),
+            ["spawn_mud"] = ("GarbageManager", new[] { "CreateJustDirt" }, Array.Empty<object>()),
+            ["clean_store"] = ("GarbageManager", new[] { "Dusting" }, Array.Empty<object>()),
+            ["upgrade_store"] = ("StoreLevelManager", new[] { "AddPoint" }, new object[] { 100 }),
+            ["stock_bonus"] = ("StoreLevelManager", new[] { "AddPointOrder" }, new object[] { 1 }),
+        };
+
+        if (mappings.TryGetValue(action, out var mapping) && TryInvokeNamed(mapping.type, mapping.methods, mapping.args, out message))
+            return true;
+
+        if (string.Equals(action, "lights_off", StringComparison.OrdinalIgnoreCase) &&
+            TrySetProperty("StoreLightManager", "TurnOn", false, out message)) return true;
+        if (string.Equals(action, "lights_on", StringComparison.OrdinalIgnoreCase) &&
+            TrySetProperty("StoreLightManager", "TurnOn", true, out message)) return true;
+        if (string.Equals(action, "open_store", StringComparison.OrdinalIgnoreCase) &&
+            TrySetProperty("StoreLightManager", "TurnOn", true, out message)) return true;
+        if (string.Equals(action, "close_store", StringComparison.OrdinalIgnoreCase) &&
+            TrySetProperty("StoreLightManager", "TurnOn", false, out message)) return true;
+        if (string.Equals(action, "bankruptcy_warning", StringComparison.OrdinalIgnoreCase))
+            return TryAddMoney(-500, out message);
+        if (string.Equals(action, "announce_donor", StringComparison.OrdinalIgnoreCase))
+        {
+            message = "Action annoncee dans le journal du pont";
+            return true;
+        }
+
+        message = $"{action} non exécuté : action non disponible dans cette version du jeu";
+        Log.LogWarning(message);
+        return false;
+    }
+
+    private bool TryInvokeNamed(string typeName, string[] methodNames, object[] args, out string message)
+    {
+        var type = AppDomain.CurrentDomain.GetAssemblies().SelectMany(SafeGetTypes)
+            .FirstOrDefault(candidate => string.Equals(candidate.Name, typeName, StringComparison.Ordinal));
+        if (type is null) { message = $"type {typeName} introuvable"; return false; }
+        var target = GetSingleton(type) ?? FindUnityInstance(type);
+        if (target is null) { message = $"instance de {typeName} introuvable"; return false; }
+        var method = methodNames.Select(name => SafeGetMethods(type).FirstOrDefault(candidate =>
+            candidate.Name == name && !candidate.IsStatic && candidate.GetParameters().Length == args.Length))
+            .FirstOrDefault(candidate => candidate is not null);
+        if (method is null) { message = $"méthode de {typeName} introuvable"; return false; }
+        method.Invoke(target, args);
+        message = $"{method.Name} exécuté";
+        return true;
+    }
+
+    private bool TrySetProperty(string typeName, string propertyName, object value, out string message)
+    {
+        var type = AppDomain.CurrentDomain.GetAssemblies().SelectMany(SafeGetTypes)
+            .FirstOrDefault(candidate => string.Equals(candidate.Name, typeName, StringComparison.Ordinal));
+        var target = type is null ? null : GetSingleton(type) ?? FindUnityInstance(type);
+        var property = type?.GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (target is null || property?.CanWrite != true) { message = $"propriété {typeName}.{propertyName} introuvable"; return false; }
+        property.SetValue(target, value);
+        message = $"{propertyName} défini sur {value}";
+        return true;
     }
 
     private bool TryAddMoney(int amount, out string message)
@@ -182,7 +270,7 @@ public sealed class Plugin : BasePlugin
                 {
                     var transitionType = moneyTransition.GetParameters()[1].ParameterType;
                     moneyTransition.Invoke(moneyManager, new object[] { (float)amount, Enum.ToObject(transitionType, 0), true });
-                    message = $"AddMoney() exécuté par le jeu : +{amount}";
+                    message = $"MoneyTransition exécuté par le jeu : {(amount >= 0 ? "+" : "")}{amount}";
                     return true;
                 }
 
@@ -193,7 +281,7 @@ public sealed class Plugin : BasePlugin
                     var updated = current + amount;
                     var targetType = Nullable.GetUnderlyingType(moneyProperty.PropertyType) ?? moneyProperty.PropertyType;
                     moneyProperty.SetValue(moneyManager, Convert.ChangeType(updated, targetType));
-                    message = $"AddMoney() exécuté par le jeu : +{amount}";
+                    message = $"Money exécuté par le jeu : {(amount >= 0 ? "+" : "")}{amount}";
                     return true;
                 }
             }
@@ -293,9 +381,10 @@ public sealed class Plugin : BasePlugin
         public JsonElement Parameters { get; set; }
     }
 
-    private sealed class PendingMoneyAction
+    private sealed class PendingGameAction
     {
-        public PendingMoneyAction(int amount) => Amount = amount;
+        public PendingGameAction(string action, int amount) { Action = action; Amount = amount; }
+        public string Action { get; }
         public int Amount { get; }
         public TaskCompletionSource<ActionResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
