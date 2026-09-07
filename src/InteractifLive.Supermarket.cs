@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.8-dev";
+    public const string PluginVersion = "0.1.9-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -198,6 +198,12 @@ public sealed class Plugin : BasePlugin
             message = $"{repeat} clients ajoutés";
             return true;
         }
+        if (string.Equals(action, "spawn_shoplifters", StringComparison.OrdinalIgnoreCase))
+        {
+            for (var i = 0; i < repeat; i++) if (!TryInvokeNamed("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>(), out message)) return false;
+            message = $"{repeat} voleurs ajoutés";
+            return true;
+        }
         if (string.Equals(action, "spawn_delivery", StringComparison.OrdinalIgnoreCase) || string.Equals(action, "stock_bonus", StringComparison.OrdinalIgnoreCase))
             return TryDeliverUnlockedProducts(repeat, out message);
         if (string.Equals(action, "remove_customer", StringComparison.OrdinalIgnoreCase) || string.Equals(action, "remove_customers", StringComparison.OrdinalIgnoreCase))
@@ -212,8 +218,11 @@ public sealed class Plugin : BasePlugin
             TrySetProperty("StoreLightManager", "TurnOn", false, out message)) return true;
         if (string.Equals(action, "lights_on", StringComparison.OrdinalIgnoreCase) &&
             TrySetProperty("StoreLightManager", "TurnOn", true, out message)) return true;
-        if (string.Equals(action, "open_store", StringComparison.OrdinalIgnoreCase) &&
-            TrySetProperty("StoreLightManager", "TurnOn", true, out message)) return true;
+        if (string.Equals(action, "open_store", StringComparison.OrdinalIgnoreCase))
+        {
+            TryInvokeNamed("StoreStatus", new[] { "SetIsOpenField" }, new object[] { true }, out _);
+            return TrySetProperty("StoreLightManager", "TurnOn", true, out message);
+        }
         if (string.Equals(action, "close_store", StringComparison.OrdinalIgnoreCase) &&
             TryInvokeNamed("StoreStatus", new[] { "SetIsOpenField" }, new object[] { false }, out message)) return true;
         if (string.Equals(action, "block_checkout", StringComparison.OrdinalIgnoreCase) &&
