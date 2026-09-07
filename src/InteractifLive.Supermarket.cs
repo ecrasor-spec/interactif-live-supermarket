@@ -1,6 +1,7 @@
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -81,7 +82,14 @@ public sealed class Plugin : BasePlugin
                 using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
                 var payload = JsonSerializer.Deserialize<BridgeAction>(reader.ReadToEnd()) ?? new BridgeAction();
                 Log.LogInfo($"Action reçue : {payload.Action ?? "ping"} · donateur : {payload.Donor ?? "inconnu"}");
-                body = JsonSerializer.Serialize(new { success = true, accepted = true, action = payload.Action ?? "ping", gameplay = false });
+                var gameplay = false;
+                var resultMessage = "Action journalisée";
+                if (string.Equals(payload.Action, "add_money", StringComparison.OrdinalIgnoreCase))
+                {
+                    var amount = payload.Parameters.ValueKind == JsonValueKind.Object && payload.Parameters.TryGetProperty("amount", out var value) && value.TryGetInt32(out var parsed) ? parsed : 100;
+                    gameplay = TryAddMoney(Math.Clamp(amount, 1, 100000), out resultMessage);
+                }
+                body = JsonSerializer.Serialize(new { success = true, accepted = true, action = payload.Action ?? "ping", gameplay, message = resultMessage });
             }
             else
             {
@@ -98,6 +106,50 @@ public sealed class Plugin : BasePlugin
             Log.LogWarning($"Requête du pont refusée : {ex.Message}");
             try { context.Response.StatusCode = 500; context.Response.Close(); } catch { }
         }
+    }
+
+    private bool TryAddMoney(int amount, out string message)
+    {
+        try
+        {
+            var bankType = AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(SafeGetTypes)
+                .FirstOrDefault(type => string.Equals(type.Name, "BankManager", StringComparison.Ordinal));
+            if (bankType is null) { message = "BankManager introuvable"; return false; }
+
+            var target = GetSingleton(bankType);
+            var method = bankType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+                .FirstOrDefault(candidate => candidate.Name == "AddMoney" && candidate.GetParameters().Length == 1 && candidate.GetParameters()[0].ParameterType == typeof(int));
+            if (method is null) { message = "Méthode AddMoney(int) introuvable"; return false; }
+            method.Invoke(method.IsStatic ? null : target, new object[] { amount });
+            message = $"{amount} ajouté(s)";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = $"AddMoney non exécuté : {ex.GetBaseException().Message}";
+            Log.LogWarning(message);
+            return false;
+        }
+    }
+
+    private static object? GetSingleton(Type type)
+    {
+        foreach (var name in new[] { "Instance", "instance", "CurrentInstance" })
+        {
+            var property = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (property is not null) return property.GetValue(null);
+            var field = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (field is not null) return field.GetValue(null);
+        }
+        return null;
+    }
+
+    private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
+    {
+        try { return assembly.GetTypes(); }
+        catch (ReflectionTypeLoadException ex) { return ex.Types.Where(type => type is not null)!; }
+        catch { return Array.Empty<Type>(); }
     }
 
     private sealed class BridgeAction
