@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.4-dev";
+    public const string PluginVersion = "0.1.5-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -170,16 +170,33 @@ public sealed class Plugin : BasePlugin
     {
         try
         {
+            var moneyManagerType = AppDomain.CurrentDomain.GetAssemblies()
+                .SelectMany(SafeGetTypes)
+                .FirstOrDefault(type => string.Equals(type.Name, "MoneyManager", StringComparison.Ordinal));
+            if (moneyManagerType is not null)
+            {
+                var moneyManager = GetSingleton(moneyManagerType) ?? FindUnityInstance(moneyManagerType);
+                var moneyProperty = moneyManagerType.GetProperty("Money", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (moneyManager is not null && moneyProperty?.CanRead == true && moneyProperty.CanWrite)
+                {
+                    var current = Convert.ToSingle(moneyProperty.GetValue(moneyManager));
+                    var updated = current + amount;
+                    var targetType = Nullable.GetUnderlyingType(moneyProperty.PropertyType) ?? moneyProperty.PropertyType;
+                    moneyProperty.SetValue(moneyManager, Convert.ChangeType(updated, targetType));
+                    message = $"AddMoney() exécuté par le jeu : +{amount}";
+                    return true;
+                }
+            }
+
             var methodOwners = AppDomain.CurrentDomain.GetAssemblies()
                 .SelectMany(SafeGetTypes)
                 .SelectMany(type => SafeGetMethods(type).Select(method => new { type, method }))
                 .Where(item => item.method.Name == "AddMoney" && item.method.GetParameters().Length == 0)
                 .Where(item => !string.Equals(item.type.FullName, "__Project__.Scripts.Cheating.CheatCanvas", StringComparison.Ordinal))
-                .OrderBy(item => string.Equals(item.type.FullName, "__Project__.Scripts.Cheating.CheatManager", StringComparison.Ordinal) ? 0 : 1)
-                .ThenBy(item => item.type.FullName?.Contains("Cheat", StringComparison.OrdinalIgnoreCase) == true ? 0 : 1)
+                .Where(item => item.type.FullName is null || !item.type.FullName.Contains("Cheat", StringComparison.OrdinalIgnoreCase))
                 .ToList();
             var methodOwner = methodOwners.FirstOrDefault();
-            if (methodOwner is null) { message = "Méthode AddMoney() introuvable dans les classes chargées"; return false; }
+            if (methodOwner is null) { message = "MoneyManager.Money introuvable ou non modifiable"; return false; }
 
             var target = GetSingleton(methodOwner.type) ?? FindUnityInstance(methodOwner.type);
             if (!methodOwner.method.IsStatic && target is null)
@@ -189,7 +206,7 @@ public sealed class Plugin : BasePlugin
                 return false;
             }
             methodOwner.method.Invoke(methodOwner.method.IsStatic ? null : target, null);
-            message = "AddMoney() exécuté par le jeu";
+            message = $"AddMoney() exécuté par le jeu : +{amount}";
             return true;
         }
         catch (Exception ex)
