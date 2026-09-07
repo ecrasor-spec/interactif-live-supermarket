@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.9-dev";
+    public const string PluginVersion = "0.1.10-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -251,8 +251,13 @@ public sealed class Plugin : BasePlugin
             if (delivery is null || licenses is null || cartType is null || itemType is null) { message = "système de livraison ou licences introuvable"; return false; }
             var productProperty = licenseType.GetProperty("ActiveProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
                 ?? licenseType.GetProperty("UnlockedProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            var productIds = productProperty?.GetValue(licenses) as System.Collections.IEnumerable;
-            var productId = productIds?.Cast<object>().Select(Convert.ToInt32).FirstOrDefault() ?? 0;
+            var productIds = productProperty?.GetValue(licenses);
+            var productId = ReadListItems(productIds).Select(Convert.ToInt32).FirstOrDefault();
+            if (productId <= 0)
+            {
+                var unlockedProperty = licenseType.GetProperty("UnlockedProducts", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                productId = ReadListItems(unlockedProperty?.GetValue(licenses)).Select(Convert.ToInt32).FirstOrDefault();
+            }
             if (productId <= 0) { message = "aucun article débloqué disponible pour la livraison"; return false; }
             var cart = Activator.CreateInstance(cartType);
             var item = Activator.CreateInstance(itemType, new object[] { productId, 0f });
@@ -280,8 +285,8 @@ public sealed class Plugin : BasePlugin
             var generatorType = FindType("CustomerGenerator");
             var manager = managerType is null ? null : GetSingleton(managerType) ?? FindUnityInstance(managerType);
             var generator = generatorType is null ? null : GetSingleton(generatorType) ?? FindUnityInstance(generatorType);
-            var customers = managerType?.GetProperty("ActiveCustomers", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(manager) as System.Collections.IEnumerable;
-            var customerList = customers?.Cast<object>().Take(count).ToList() ?? new List<object>();
+            var customers = managerType?.GetProperty("ActiveCustomers", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(manager);
+            var customerList = ReadListItems(customers).Take(count).ToList();
             var method = generatorType?.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).FirstOrDefault(m => m.Name == "DeSpawn" && m.GetParameters().Length == 1);
             if (generator is null || method is null || customerList.Count == 0) { message = "aucun client actif à retirer"; return false; }
             foreach (var customer in customerList) method.Invoke(generator, new[] { customer });
@@ -292,6 +297,23 @@ public sealed class Plugin : BasePlugin
     }
 
     private static Type FindType(string typeName) => AppDomain.CurrentDomain.GetAssemblies().SelectMany(SafeGetTypes).FirstOrDefault(type => string.Equals(type.Name, typeName, StringComparison.Ordinal));
+
+    private static IEnumerable<object> ReadListItems(object list)
+    {
+        if (list is null) yield break;
+        var listType = list.GetType();
+        var countProperty = listType.GetProperty("Count", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        var itemProperty = listType.GetProperty("Item", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (countProperty is null || itemProperty is null) yield break;
+        var count = Convert.ToInt32(countProperty.GetValue(list));
+        for (var index = 0; index < count; index++)
+        {
+            object item;
+            try { item = itemProperty.GetValue(list, new object[] { index }); }
+            catch { yield break; }
+            if (item is not null) yield return item;
+        }
+    }
 
     private bool TryInvokeNamed(string typeName, string[] methodNames, object[] args, out string message)
     {
