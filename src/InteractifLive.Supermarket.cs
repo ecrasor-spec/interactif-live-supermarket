@@ -1,26 +1,51 @@
+#nullable disable
+
 using BepInEx;
 using BepInEx.Unity.IL2CPP;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using UnityEngine;
 
-namespace InteractifLive.Supermarket;
+namespace System.Runtime.CompilerServices
+{
+    [AttributeUsage(AttributeTargets.All, Inherited = false)]
+    internal sealed class NullableAttribute : Attribute
+    {
+        public NullableAttribute(byte value) { }
+        public NullableAttribute(byte[] value) { }
+    }
+
+    [AttributeUsage(AttributeTargets.All, Inherited = false)]
+    internal sealed class NullableContextAttribute : Attribute
+    {
+        public NullableContextAttribute(byte value) { }
+    }
+}
+
+namespace InteractifLive.Supermarket
+{
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
 public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.3-dev";
+    public const string PluginVersion = "0.1.4-dev";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
-    private HttpListener? _listener;
-    private CancellationTokenSource? _stopToken;
+    private HttpListener _listener;
+    private CancellationTokenSource _stopToken;
+    private readonly ConcurrentQueue<PendingMoneyAction> _pendingMoneyActions = new();
+    private ActionRunner _actionRunner;
 
     public override void Load()
     {
         Log.LogInfo($"{PluginName} {PluginVersion} chargé.");
+        _actionRunner = AddComponent<ActionRunner>();
+        _actionRunner.Plugin = this;
         StartBridge();
     }
 
@@ -29,6 +54,7 @@ public sealed class Plugin : BasePlugin
         _stopToken?.Cancel();
         _listener?.Close();
         _listener = null;
+        _actionRunner = null;
         return true;
     }
 
@@ -87,7 +113,7 @@ public sealed class Plugin : BasePlugin
                 if (string.Equals(payload.Action, "add_money", StringComparison.OrdinalIgnoreCase))
                 {
                     var amount = payload.Parameters.ValueKind == JsonValueKind.Object && payload.Parameters.TryGetProperty("amount", out var value) && value.TryGetInt32(out var parsed) ? parsed : 100;
-                    gameplay = TryAddMoney(Math.Clamp(amount, 1, 100000), out resultMessage);
+                    gameplay = QueueAddMoney(Math.Clamp(amount, 1, 100000), out resultMessage);
                 }
                 body = JsonSerializer.Serialize(new { success = true, accepted = true, action = payload.Action ?? "ping", gameplay, message = resultMessage });
             }
@@ -105,6 +131,38 @@ public sealed class Plugin : BasePlugin
         {
             Log.LogWarning($"Requête du pont refusée : {ex.Message}");
             try { context.Response.StatusCode = 500; context.Response.Close(); } catch { }
+        }
+    }
+
+    private bool QueueAddMoney(int amount, out string message)
+    {
+        var pending = new PendingMoneyAction(amount);
+        _pendingMoneyActions.Enqueue(pending);
+        if (!pending.Completion.Task.Wait(TimeSpan.FromSeconds(10)))
+        {
+            message = "AddMoney non exécuté : délai dépassé en attendant le thread principal Unity";
+            Log.LogWarning(message);
+            return false;
+        }
+
+        var result = pending.Completion.Task.Result;
+        message = result.Message;
+        return result.Success;
+    }
+
+    private void ProcessPendingActions()
+    {
+        while (_pendingMoneyActions.TryDequeue(out var pending))
+        {
+            try
+            {
+                var success = TryAddMoney(pending.Amount, out var message);
+                pending.Completion.TrySetResult(new ActionResult(success, message));
+            }
+            catch (Exception ex)
+            {
+                pending.Completion.TrySetResult(new ActionResult(false, $"AddMoney non exécuté : {ex.GetBaseException().Message}"));
+            }
         }
     }
 
@@ -142,7 +200,7 @@ public sealed class Plugin : BasePlugin
         }
     }
 
-    private static object? GetSingleton(Type type)
+    private static object GetSingleton(Type type)
     {
         foreach (var name in new[] { "Instance", "instance", "CurrentInstance" })
         {
@@ -154,7 +212,7 @@ public sealed class Plugin : BasePlugin
         return null;
     }
 
-    private object? FindUnityInstance(Type type)
+    private object FindUnityInstance(Type type)
     {
         try
         {
@@ -203,8 +261,38 @@ public sealed class Plugin : BasePlugin
 
     private sealed class BridgeAction
     {
-        public string? Action { get; set; }
-        public string? Donor { get; set; }
+        public string Action { get; set; }
+        public string Donor { get; set; }
         public JsonElement Parameters { get; set; }
     }
+
+    private sealed class PendingMoneyAction
+    {
+        public PendingMoneyAction(int amount) => Amount = amount;
+        public int Amount { get; }
+        public TaskCompletionSource<ActionResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class ActionResult
+    {
+        public ActionResult(bool success, string message)
+        {
+            Success = success;
+            Message = message;
+        }
+
+        public bool Success { get; }
+        public string Message { get; }
+    }
+
+    private sealed class ActionRunner : MonoBehaviour
+    {
+        public Plugin Plugin { get; set; }
+
+        public void Update()
+        {
+            Plugin?.ProcessPendingActions();
+        }
+    }
+}
 }
