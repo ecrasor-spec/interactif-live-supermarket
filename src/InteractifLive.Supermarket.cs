@@ -80,7 +80,7 @@ public sealed class Plugin : BasePlugin
             else if (request.HttpMethod == "POST" && request.Url?.AbsolutePath == "/action")
             {
                 using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var payload = JsonSerializer.Deserialize<BridgeAction>(reader.ReadToEnd()) ?? new BridgeAction();
+                var payload = JsonSerializer.Deserialize<BridgeAction>(reader.ReadToEnd(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new BridgeAction();
                 Log.LogInfo($"Action reçue : {payload.Action ?? "ping"} · donateur : {payload.Donor ?? "inconnu"}");
                 var gameplay = false;
                 var resultMessage = "Action journalisée";
