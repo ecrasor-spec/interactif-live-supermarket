@@ -1,11 +1,11 @@
 {
   "id": "interactif-live-supermarket",
   "name": "Interactif Live — Supermarket Simulator",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "released": true,
   "status": "prerelease",
   "message": "Actions Supermarket : clients, livraisons d’articles débloqués, déchets, saleté, nettoyage global compatible avec plusieurs versions et éclairage.",
   "repository_url": "https://github.com/ecrasor-spec/interactif-live-supermarket",
-  "download_url": "https://github.com/ecrasor-spec/interactif-live-supermarket/releases/download/v0.1.12/InteractifLive.Supermarket.dll",
-  "checksum_sha256": "513F44AE4825125961F6B3050EFB7E41712C8E79FD5AB94153199A13A9948C02"
+  "download_url": "https://github.com/ecrasor-spec/interactif-live-supermarket/releases/download/v0.1.13/InteractifLive.Supermarket.dll",
+  "checksum_sha256": "101EE1662C53C43DA38FAE4BE0ACF1D8EB7FED30C8D62A8E09B41A910A7DEE20"
 }

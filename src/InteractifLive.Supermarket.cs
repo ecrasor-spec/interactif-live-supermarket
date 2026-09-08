@@ -249,7 +249,6 @@ public sealed class Plugin : BasePlugin
         {
             "CleanAll", "CleanStore", "ClearAll", "ClearAllGarbage", "ClearAllDirt",
             "RemoveAllGarbage", "RemoveAllDirt", "CleanAllGarbage", "CleanAllDirt",
-            "Dusting"
         };
 
         foreach (var managerName in managerNames)
@@ -305,7 +304,7 @@ public sealed class Plugin : BasePlugin
             }
         }
 
-        message = "nettoyage global indisponible : la version actuelle du jeu n'expose pas de méthode CleanAll/CleanStore sans paramètre";
+        message = "nettoyage global indisponible : aucune méthode de nettoyage global n'est exposée par cette version du jeu";
         Log.LogWarning(message);
         return false;
     }
@@ -337,13 +336,18 @@ public sealed class Plugin : BasePlugin
             {
                 var productId = productPool[UnityEngine.Random.Range(0, productPool.Count)];
                 var cart = Activator.CreateInstance(cartType);
-                var item = Activator.CreateInstance(itemType, new object[] { productId, 0f });
+                // ItemQuantity's second argument is the quantity. Passing 0f
+                // creates an empty delivery: the reflection call succeeds, but
+                // no box can appear in the store. Always deliver one item per
+                // generated cart; repeat controls the number of deliveries.
+                var item = Activator.CreateInstance(itemType, new object[] { productId, 1f });
                 var carts = Activator.CreateInstance(cartsType);
                 var add = carts?.GetType().GetMethod("Add", new[] { itemType });
                 if (cart is null || item is null || carts is null || add is null) { message = "conteneur de livraison introuvable"; return false; }
                 add.Invoke(carts, new[] { item });
                 cartsProperty.SetValue(cart, carts);
                 method.Invoke(delivery, new[] { cart });
+                Log.LogInfo($"Livraison créée : produit {productId}, quantité 1");
                 deliveredProducts.Add(productId);
             }
             message = $"{count} livraison(s) aléatoire(s) parmi {productPool.Count} article(s) débloqué(s)";

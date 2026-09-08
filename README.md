@@ -8,7 +8,7 @@ Le dépôt officiel du plugin est : https://github.com/ecrasor-spec/interactif-l
 
 Le plugin `0.1.12` est fonctionnel avec Supermarket Simulator 1.0.43.0 et expose un pont local utilisé par Interactif Live. Les actions disponibles sont séparées de Minecraft : clients, voleurs, livraisons aléatoires, déchets, saleté, nettoyage, progression et éclairage.
 
-La recherche Exa a confirmé que le nettoyage global est une mécanique réelle du jeu et qu’un mod existant, **Easy Cleaning**, propose une action `CleanAllHotkey`. L’action Interactif Live `clean_store` essaie désormais plusieurs noms de managers et méthodes (`CleanAll`, `CleanStore`, `ClearAllGarbage`, `ClearAllDirt`, `Dusting`, etc.), puis un point d’entrée compatible avec Easy Cleaning s’il est installé. Si la version du jeu ne fournit aucune de ces méthodes, l’action est refusée explicitement dans le journal au lieu d’afficher un faux succès.
+La recherche Exa a confirmé que le nettoyage global est une mécanique réelle du jeu et qu’un mod existant, **Easy Cleaning**, propose une action `CleanAllHotkey`. L’action Interactif Live `clean_store` essaie les méthodes globales (`CleanAll`, `CleanStore`, `ClearAllGarbage`, `ClearAllDirt`, etc.), puis un point d’entrée compatible avec Easy Cleaning s’il est installé. `Dusting` n’est plus accepté comme faux succès : il ne garantit pas que le magasin entier soit nettoyé. Les livraisons créent maintenant une quantité réelle de `1` par article ; la répétition contrôle le nombre de livraisons.
 
 ## Prérequis
 
