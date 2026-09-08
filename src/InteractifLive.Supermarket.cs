@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.11-dev";
+    public const string PluginVersion = "0.1.12";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -187,7 +187,6 @@ public sealed class Plugin : BasePlugin
             ["spawn_shoplifter"] = ("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>()),
             ["spawn_garbage"] = ("GarbageManager", new[] { "SpawnGarbage", "CreateJustGarbage" }, Array.Empty<object>()),
             ["spawn_mud"] = ("GarbageManager", new[] { "CreateJustDirt" }, Array.Empty<object>()),
-            ["clean_store"] = ("GarbageManager", new[] { "Dusting" }, Array.Empty<object>()),
             ["upgrade_store"] = ("StoreLevelManager", new[] { "AddPoint" }, new object[] { 100 }),
         };
 
@@ -210,6 +209,8 @@ public sealed class Plugin : BasePlugin
             return TryRemoveCustomers(repeat, out message);
         if (string.Equals(action, "angry_customer", StringComparison.OrdinalIgnoreCase))
             return TryInvokeNamed("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>(), out message);
+        if (string.Equals(action, "clean_store", StringComparison.OrdinalIgnoreCase))
+            return TryCleanStore(out message);
 
         if (mappings.TryGetValue(action, out var mapping) && TryInvokeNamed(mapping.type, mapping.methods, mapping.args, out message))
             return true;
@@ -234,6 +235,77 @@ public sealed class Plugin : BasePlugin
         }
 
         message = $"{action} non exécuté : action non disponible dans cette version du jeu";
+        Log.LogWarning(message);
+        return false;
+    }
+
+    private bool TryCleanStore(out string message)
+    {
+        // The game has changed the cleaning implementation between updates.
+        // Do not rely on only GarbageManager.Dusting: on newer builds it may be
+        // renamed, moved to another manager, or require a different instance.
+        var managerNames = new[] { "GarbageManager", "CleaningManager", "StoreCleaningManager", "DustManager" };
+        var methodNames = new[]
+        {
+            "CleanAll", "CleanStore", "ClearAll", "ClearAllGarbage", "ClearAllDirt",
+            "RemoveAllGarbage", "RemoveAllDirt", "CleanAllGarbage", "CleanAllDirt",
+            "Dusting"
+        };
+
+        foreach (var managerName in managerNames)
+        {
+            var type = FindType(managerName);
+            if (type is null) continue;
+            var target = GetSingleton(type) ?? FindUnityInstance(type);
+            if (target is null) continue;
+            foreach (var methodName in methodNames)
+            {
+                var method = SafeGetMethods(type).FirstOrDefault(candidate =>
+                    candidate.Name.Equals(methodName, StringComparison.OrdinalIgnoreCase) &&
+                    !candidate.IsStatic && candidate.GetParameters().Length == 0);
+                if (method is null) continue;
+                try
+                {
+                    method.Invoke(target, null);
+                    message = $"{managerName}.{method.Name} exécuté";
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Log.LogWarning($"{managerName}.{method.Name} refusé : {ex.GetBaseException().Message}");
+                }
+            }
+        }
+
+        // Compatibility fallback for cleaning plugins such as Easy Cleaning:
+        // if one is present, call its public/private parameterless clean-all
+        // entry point without making it a mandatory dependency.
+        foreach (var type in AppDomain.CurrentDomain.GetAssemblies().SelectMany(SafeGetTypes))
+        {
+            var fullName = type.FullName ?? type.Name;
+            if (!fullName.Contains("EasyCleaning", StringComparison.OrdinalIgnoreCase) &&
+                !fullName.Contains("Cleaning", StringComparison.OrdinalIgnoreCase)) continue;
+            var target = type.IsAbstract && type.IsSealed ? null : GetSingleton(type) ?? FindUnityInstance(type);
+            foreach (var method in SafeGetMethods(type).Where(candidate =>
+                !candidate.IsStatic && candidate.GetParameters().Length == 0 &&
+                (candidate.Name.Contains("CleanAll", StringComparison.OrdinalIgnoreCase) ||
+                 candidate.Name.Contains("CleanStore", StringComparison.OrdinalIgnoreCase))))
+            {
+                if (target is null) continue;
+                try
+                {
+                    method.Invoke(target, null);
+                    message = $"{type.Name}.{method.Name} exécuté";
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Log.LogWarning($"{type.Name}.{method.Name} refusé : {ex.GetBaseException().Message}");
+                }
+            }
+        }
+
+        message = "nettoyage global indisponible : la version actuelle du jeu n'expose pas de méthode CleanAll/CleanStore sans paramètre";
         Log.LogWarning(message);
         return false;
     }
