@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.13";
+    public const string PluginVersion = "0.1.14";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -190,7 +190,9 @@ public sealed class Plugin : BasePlugin
             ["upgrade_store"] = ("StoreLevelManager", new[] { "AddPoint" }, new object[] { 100 }),
         };
 
-        var repeat = Math.Clamp(Math.Abs(amount), 1, 10);
+        // The action catalog contains explicit 20 and 30 item deliveries.
+        // Keep the safety limit above the largest configured action.
+        var repeat = Math.Clamp(Math.Abs(amount), 1, 30);
         if (string.Equals(action, "spawn_customers", StringComparison.OrdinalIgnoreCase))
         {
             for (var i = 0; i < repeat; i++) if (!TryInvokeNamed("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>(), out message)) return false;
@@ -302,6 +304,57 @@ public sealed class Plugin : BasePlugin
                     Log.LogWarning($"{type.Name}.{method.Name} refusé : {ex.GetBaseException().Message}");
                 }
             }
+        }
+
+        // On the current build, dirt, dust and garbage are tracked as separate
+        // objects. There is no global CleanAll method, so clean each active
+        // object through the game's own Despawn/Clean* methods.
+        var cleaned = 0;
+        foreach (var managerName in new[] { "GarbageManager", "DirtManager", "DustManager" })
+        {
+            var managerType = FindType(managerName);
+            var manager = managerType is null ? null : GetSingleton(managerType) ?? FindUnityInstance(managerType);
+            if (managerType is null || manager is null) continue;
+            foreach (var property in SafeGetProperties(managerType))
+            {
+                if (!property.CanRead || property.GetIndexParameters().Length != 0) continue;
+                if (!property.Name.Contains("Garbage", StringComparison.OrdinalIgnoreCase) &&
+                    !property.Name.Contains("Dirt", StringComparison.OrdinalIgnoreCase) &&
+                    !property.Name.Contains("Dust", StringComparison.OrdinalIgnoreCase)) continue;
+                object values;
+                try { values = property.GetValue(manager); } catch { continue; }
+                var items = ReadListItems(values).ToList();
+                foreach (var item in items)
+                {
+                    var itemType = item.GetType();
+                    var candidates = SafeGetMethods(managerType).Where(method =>
+                        !method.IsStatic && method.GetParameters().Length == 1 &&
+                        (method.Name.Equals("Despawn", StringComparison.OrdinalIgnoreCase) ||
+                         method.Name.Equals("CleanDirt", StringComparison.OrdinalIgnoreCase) ||
+                         method.Name.Equals("CleanDust", StringComparison.OrdinalIgnoreCase) ||
+                         method.Name.Equals("Clean", StringComparison.OrdinalIgnoreCase)) &&
+                        method.GetParameters()[0].ParameterType.IsAssignableFrom(itemType));
+                    var itemMethod = SafeGetMethods(itemType).FirstOrDefault(method =>
+                        !method.IsStatic && method.GetParameters().Length == 0 &&
+                        (method.Name.Equals("Despawn", StringComparison.OrdinalIgnoreCase) ||
+                         method.Name.Equals("Clean", StringComparison.OrdinalIgnoreCase)));
+                    var done = false;
+                    foreach (var method in candidates)
+                    {
+                        try { method.Invoke(manager, new[] { item }); done = true; break; } catch { }
+                    }
+                    if (!done && itemMethod is not null)
+                    {
+                        try { itemMethod.Invoke(item, null); done = true; } catch { }
+                    }
+                    if (done) cleaned++;
+                }
+            }
+        }
+        if (cleaned > 0)
+        {
+            message = $"{cleaned} élément(s) de saleté/déchet nettoyé(s)";
+            return true;
         }
 
         message = "nettoyage global indisponible : aucune méthode de nettoyage global n'est exposée par cette version du jeu";
@@ -540,6 +593,12 @@ public sealed class Plugin : BasePlugin
     {
         try { return type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static); }
         catch { return Array.Empty<MethodInfo>(); }
+    }
+
+    private static IEnumerable<PropertyInfo> SafeGetProperties(Type type)
+    {
+        try { return type.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static); }
+        catch { return Array.Empty<PropertyInfo>(); }
     }
 
     private sealed class BridgeAction
