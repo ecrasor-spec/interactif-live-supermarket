@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.14";
+    public const string PluginVersion = "0.1.15";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -181,14 +181,14 @@ public sealed class Plugin : BasePlugin
         if (string.Equals(action, "remove_money", StringComparison.OrdinalIgnoreCase))
             return TryAddMoney(-Math.Abs(amount), out message);
 
-        var mappings = new Dictionary<string, (string type, string[] methods, object[] args)>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["spawn_customer"] = ("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>()),
-            ["spawn_shoplifter"] = ("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>()),
-            ["spawn_garbage"] = ("GarbageManager", new[] { "SpawnGarbage", "CreateJustGarbage" }, Array.Empty<object>()),
-            ["spawn_mud"] = ("GarbageManager", new[] { "CreateJustDirt" }, Array.Empty<object>()),
-            ["upgrade_store"] = ("StoreLevelManager", new[] { "AddPoint" }, new object[] { 100 }),
-        };
+            var mappings = new Dictionary<string, (string type, string[] methods, object[] args)>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["spawn_customer"] = ("CustomerManager", new[] { "SpawnCustomer" }, Array.Empty<object>()),
+                ["spawn_shoplifter"] = ("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>()),
+                ["spawn_garbage"] = ("GarbageManager", new[] { "SpawnGarbage", "CreateJustGarbage", "GenerateRandomGarbage" }, Array.Empty<object>()),
+                ["spawn_mud"] = ("GarbageManager", new[] { "CreateJustDirt", "SpawnDirt", "CreateDirt", "GenerateRandomDirt" }, Array.Empty<object>()),
+                ["upgrade_store"] = ("StoreLevelManager", new[] { "AddPoint" }, new object[] { 100 }),
+            };
 
         // The action catalog contains explicit 20 and 30 item deliveries.
         // Keep the safety limit above the largest configured action.
@@ -203,6 +203,20 @@ public sealed class Plugin : BasePlugin
         {
             for (var i = 0; i < repeat; i++) if (!TryInvokeNamed("CustomerManager", new[] { "SpawnShoplifter" }, Array.Empty<object>(), out message)) return false;
             message = $"{repeat} voleurs ajoutés";
+            return true;
+        }
+        if (string.Equals(action, "spawn_garbage", StringComparison.OrdinalIgnoreCase))
+        {
+            for (var i = 0; i < repeat; i++)
+                if (!TryInvokeNamed("GarbageManager", new[] { "SpawnGarbage", "CreateJustGarbage", "GenerateRandomGarbage" }, Array.Empty<object>(), out message)) return false;
+            message = $"{repeat} déchet(s) ajouté(s)";
+            return true;
+        }
+        if (string.Equals(action, "spawn_mud", StringComparison.OrdinalIgnoreCase))
+        {
+            for (var i = 0; i < repeat; i++)
+                if (!TryInvokeNamed("GarbageManager", new[] { "CreateJustDirt", "SpawnDirt", "CreateDirt", "GenerateRandomDirt" }, Array.Empty<object>(), out message)) return false;
+            message = $"{repeat} saleté(s) ajoutée(s)";
             return true;
         }
         if (string.Equals(action, "spawn_delivery", StringComparison.OrdinalIgnoreCase) || string.Equals(action, "stock_bonus", StringComparison.OrdinalIgnoreCase))
@@ -453,14 +467,24 @@ public sealed class Plugin : BasePlugin
             .FirstOrDefault(candidate => string.Equals(candidate.Name, typeName, StringComparison.Ordinal));
         if (type is null) { message = $"type {typeName} introuvable"; return false; }
         var target = GetSingleton(type) ?? FindUnityInstance(type);
-        if (target is null) { message = $"instance de {typeName} introuvable"; return false; }
         var method = methodNames.Select(name => SafeGetMethods(type).FirstOrDefault(candidate =>
-            candidate.Name == name && !candidate.IsStatic && candidate.GetParameters().Length == args.Length))
+            candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase) &&
+            candidate.GetParameters().Length == args.Length &&
+            (target is not null || candidate.IsStatic)))
             .FirstOrDefault(candidate => candidate is not null);
         if (method is null) { message = $"méthode de {typeName} introuvable"; return false; }
-        method.Invoke(target, args);
-        message = $"{method.Name} exécuté";
-        return true;
+        try
+        {
+            method.Invoke(method.IsStatic ? null : target, args);
+            message = $"{method.Name} exécuté";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = $"{typeName}.{method.Name} refusé : {ex.GetBaseException().Message}";
+            Log.LogWarning(message);
+            return false;
+        }
     }
 
     private bool TrySetProperty(string typeName, string propertyName, object value, out string message)
