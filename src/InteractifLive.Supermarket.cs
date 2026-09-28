@@ -34,7 +34,7 @@ public sealed class Plugin : BasePlugin
 {
     public const string PluginGuid = "jesink.interactiflive.supermarket";
     public const string PluginName = "Interactif Live - Supermarket Simulator";
-    public const string PluginVersion = "0.1.15";
+    public const string PluginVersion = "0.1.16";
     private const string BridgePrefix = "http://127.0.0.1:18946/";
     private HttpListener _listener;
     private CancellationTokenSource _stopToken;
@@ -160,7 +160,10 @@ public sealed class Plugin : BasePlugin
 
     private void ProcessPendingActions()
     {
-        while (_pendingGameActions.TryDequeue(out var pending))
+        // Keep bursts from TikTok gifts from invoking several Unity gameplay
+        // operations in the same frame. One action per frame is slower but
+        // prevents garbage/customer spawns from destabilizing the game.
+        if (_pendingGameActions.TryDequeue(out var pending))
         {
             try
             {
@@ -467,24 +470,27 @@ public sealed class Plugin : BasePlugin
             .FirstOrDefault(candidate => string.Equals(candidate.Name, typeName, StringComparison.Ordinal));
         if (type is null) { message = $"type {typeName} introuvable"; return false; }
         var target = GetSingleton(type) ?? FindUnityInstance(type);
-        var method = methodNames.Select(name => SafeGetMethods(type).FirstOrDefault(candidate =>
+        var candidates = methodNames.SelectMany(name => SafeGetMethods(type).Where(candidate =>
             candidate.Name.Equals(name, StringComparison.OrdinalIgnoreCase) &&
             candidate.GetParameters().Length == args.Length &&
-            (target is not null || candidate.IsStatic)))
-            .FirstOrDefault(candidate => candidate is not null);
-        if (method is null) { message = $"méthode de {typeName} introuvable"; return false; }
-        try
+            (target is not null || candidate.IsStatic))).ToList();
+        if (candidates.Count == 0) { message = $"méthode de {typeName} introuvable"; return false; }
+        message = $"aucune méthode de {typeName} n’a pu être exécutée";
+        foreach (var method in candidates)
         {
-            method.Invoke(method.IsStatic ? null : target, args);
-            message = $"{method.Name} exécuté";
-            return true;
+            try
+            {
+                method.Invoke(method.IsStatic ? null : target, args);
+                message = $"{method.Name} exécuté";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                message = $"{typeName}.{method.Name} refusé : {ex.GetBaseException().Message}";
+                Log.LogWarning(message);
+            }
         }
-        catch (Exception ex)
-        {
-            message = $"{typeName}.{method.Name} refusé : {ex.GetBaseException().Message}";
-            Log.LogWarning(message);
-            return false;
-        }
+        return false;
     }
 
     private bool TrySetProperty(string typeName, string propertyName, object value, out string message)
