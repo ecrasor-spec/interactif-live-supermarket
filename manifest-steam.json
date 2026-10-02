@@ -1,0 +1,13 @@
+{
+  "id": "interactif-live-supermarket-steam",
+  "name": "Interactif Live — Supermarket Simulator (Steam)",
+  "version": "0.1.16-steam",
+  "released": true,
+  "status": "stable",
+  "platform": "Steam",
+  "message": "Plugin Steam dédié : clients, livraisons, déchets, saleté, nettoyage global, progression et éclairage.",
+  "repository_url": "https://github.com/ecrasor-spec/interactif-live-supermarket",
+  "download_url": "https://raw.githubusercontent.com/ecrasor-spec/interactif-live-supermarket/main/releases/InteractifLive.Supermarket.Steam.dll",
+  "checksum_sha256": "1C365F8E8DAA94E61E851BF135DA120E9C3C1551C5BA7468024A6B4716BAE536"
+}
+
